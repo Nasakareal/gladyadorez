@@ -1,0 +1,43 @@
+workflows:
+  ios-simulator-preview:
+    name: Gladyadorez iOS Simulator Preview
+    max_build_duration: 60
+
+    environment:
+      flutter: 3.32.7
+
+    scripts:
+      - name: Show Flutter version
+        script: |
+          flutter --version
+
+      - name: Check Firebase configuration
+        script: |
+          if [ ! -f ios/Runner/GoogleService-Info.plist ]; then
+            echo "Falta ios/Runner/GoogleService-Info.plist para com.nasakareal.gladyadorez."
+            echo "Registra la app iOS en Firebase y agrega el archivo al repositorio."
+            exit 1
+          fi
+
+      - name: Disable Swift Package Manager
+        script: |
+          flutter config --no-enable-swift-package-manager
+
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+
+      - name: Build iOS Simulator App (.app)
+        script: |
+          flutter build ios \
+            --simulator \
+            --debug \
+            --no-codesign
+
+      - name: Show output
+        script: |
+          ls -lh build/ios/iphonesimulator/
+
+    artifacts:
+      - build/ios/iphonesimulator/*.app
+      - build/ios/iphonesimulator/Runner.app

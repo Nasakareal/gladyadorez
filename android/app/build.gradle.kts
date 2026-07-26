@@ -11,8 +11,9 @@ import java.io.FileInputStream
 android {
     namespace = "mx.utmorelia.sistema_afiliados_app"
 
-    // Usa los valores que expone el plugin de Flutter
-    compileSdk = flutter.compileSdkVersion
+    // Google Play exige API 36 para nuevas apps y actualizaciones
+    // a partir del 31 de agosto de 2026.
+    compileSdk = 36
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -48,7 +49,7 @@ android {
 
         // Firebase Messaging requiere minSdk >= 23
         minSdk = maxOf(23, flutter.minSdkVersion)
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
 
         // Toma versionCode/versionName del pubspec.yaml
         versionCode = flutter.versionCode

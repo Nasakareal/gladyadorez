@@ -10,7 +10,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 if [[ ! -f "$FIREBASE_PLIST" ]]; then
-  echo "Falta ios/Runner/GoogleService-Info.plist para el bundle mx.utmorelia.sistemaAfiliadosApp." >&2
+  echo "Falta ios/Runner/GoogleService-Info.plist para el bundle com.nasakareal.gladyadorez." >&2
   echo "Descárgalo desde la app iOS del proyecto Firebase gladyadorez-afiliados-1234." >&2
   exit 1
 fi
