@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "32976071408",
+    "project_id": "gladyadorez-afiliados-1234",
+    "storage_bucket": "gladyadorez-afiliados-1234.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:32976071408:android:62b3876c3c84eeede0b035",
+        "android_client_info": {
+          "package_name": "mx.utmorelia.sistema_afiliados_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBn4IbflGKj37BwKQu2vDwMTBqmIqsd7ek"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
