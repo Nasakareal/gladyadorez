@@ -1,43 +1,32 @@
 workflows:
-  ios-simulator-preview:
-    name: Gladyadorez iOS Simulator Preview
+  ios-release:
+    name: Gladyadorez iOS Release
     max_build_duration: 60
 
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.nasakareal.gladyadorez
       flutter: 3.32.7
 
     scripts:
-      - name: Show Flutter version
-        script: |
-          flutter --version
-
-      - name: Check Firebase configuration
-        script: |
-          if [ ! -f ios/Runner/GoogleService-Info.plist ]; then
-            echo "Falta ios/Runner/GoogleService-Info.plist para com.nasakareal.gladyadorez."
-            echo "Registra la app iOS en Firebase y agrega el archivo al repositorio."
-            exit 1
-          fi
-
-      - name: Disable Swift Package Manager
-        script: |
-          flutter config --no-enable-swift-package-manager
-
       - name: Get Flutter packages
         script: |
           flutter pub get
 
-      - name: Build iOS Simulator App (.app)
+      - name: Install CocoaPods
         script: |
-          flutter build ios \
-            --simulator \
-            --debug \
-            --no-codesign
+          find . -name "Podfile" -execdir pod install \;
 
-      - name: Show output
+      - name: Set up iOS code signing
         script: |
-          ls -lh build/ios/iphonesimulator/
+          xcode-project use-profiles
+
+      - name: Build signed IPA
+        script: |
+          flutter build ipa --release \
+            --export-options-plist=/Users/builder/export_options.plist
 
     artifacts:
-      - build/ios/iphonesimulator/*.app
-      - build/ios/iphonesimulator/Runner.app
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
