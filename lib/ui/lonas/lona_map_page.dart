@@ -1,12 +1,17 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/lona.dart';
 import '../../services/api_client.dart';
 import '../../services/lona_service.dart';
+import '../../widgets/safe_osm_tile_layer.dart';
 import 'authenticated_image.dart';
 
 class LonaMapPage extends StatefulWidget {
@@ -17,96 +22,212 @@ class LonaMapPage extends StatefulWidget {
 }
 
 class _LonaMapPageState extends State<LonaMapPage> {
-  bool _loading = true;
-  String? _error;
+  static const _cacheKey = 'lonas_map_last_view_v2';
+  static const _minimumZoom = 8.0;
+  static const _limit = 180;
+
+  final _map = MapController();
+  late final TileLayer _tileLayer;
+  Timer? _debounce;
+  CancelToken? _cancelToken;
   List<Lona> _lonas = const [];
+  bool _loading = false;
+  bool _offline = false;
+  double _zoom = 8;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _tileLayer = buildSafeOpenStreetMapTileLayer(
+      userAgentPackageName: 'mx.utmorelia.sistemaAfiliadosApp',
+    );
+    _restoreCache();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadVisible());
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _cancelToken?.cancel('Mapa cerrado');
+    _map.dispose();
+    super.dispose();
+  }
+
+  Future<void> _restoreCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    try {
+      final raw = jsonDecode(prefs.getString(_cacheKey) ?? '[]') as List;
+      final cached = raw
+          .map((item) => Lona.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList();
+      if (mounted && cached.isNotEmpty) {
+        setState(() {
+          _lonas = cached;
+          _offline = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  void _onMapEvent(MapEvent event) {
+    final zoom = event.camera.zoom;
+    if ((zoom - _zoom).abs() > .05 && mounted) setState(() => _zoom = zoom);
+    if (zoom < _minimumZoom) {
+      _cancelToken?.cancel('Zoom lejano');
+      if (_lonas.isNotEmpty) setState(() => _lonas = const []);
+      return;
+    }
+    if (event is! MapEventMoveEnd && event is! MapEventFlingAnimationEnd) {
+      return;
+    }
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 220), _loadVisible);
+  }
+
+  Future<void> _loadVisible() async {
+    if (!mounted || _map.camera.zoom < _minimumZoom) return;
+    final bounds = _map.camera.visibleBounds;
+    final bbox =
+        '${bounds.west},${bounds.south},${bounds.east},${bounds.north}';
+    _cancelToken?.cancel('Nueva zona visible');
+    final cancelToken = CancelToken();
+    _cancelToken = cancelToken;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final lonas = await LonaService(context.read<ApiClient>()).fetchMapData();
-      if (mounted) setState(() => _lonas = lonas);
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _error = error is DioException && error.response?.statusCode == 403
-              ? 'Tu usuario no tiene permiso para consultar el mapa de lonas.'
-              : 'No se pudo cargar el mapa de lonas.';
-        });
-      }
+      final lonas = await LonaService(
+        context.read<ApiClient>(),
+      ).fetchMapData(bbox: bbox, limit: _limit, cancelToken: cancelToken);
+      if (!mounted || cancelToken.isCancelled) return;
+      setState(() {
+        _lonas = lonas;
+        _offline = false;
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _cacheKey,
+        jsonEncode(lonas.map(_cachePayload).toList()),
+      );
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) return;
+      if (!mounted) return;
+      setState(() {
+        _offline = _lonas.isNotEmpty;
+        _error = error.response?.statusCode == 403
+            ? 'Tu usuario no tiene permiso para consultar este mapa.'
+            : _lonas.isEmpty
+            ? 'No se pudo cargar esta zona.'
+            : null;
+      });
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && identical(_cancelToken, cancelToken)) {
+        setState(() => _loading = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _load,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Reintentar'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final points = _lonas
+    final markers = _lonas
         .where((lona) => lona.lat.abs() <= 90 && lona.lng.abs() <= 180)
-        .toList();
-    return FlutterMap(
-      options: const MapOptions(
-        initialCenter: LatLng(19.7026, -101.1922),
-        initialZoom: 8,
-        minZoom: 5,
-        maxZoom: 19,
-      ),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'mx.utmorelia.sistemaAfiliadosApp',
-        ),
-        MarkerLayer(
-          markers: points
-              .map(
-                (lona) => Marker(
-                  point: LatLng(lona.lat, lona.lng),
-                  width: 52,
-                  height: 52,
-                  child: IconButton.filled(
-                    tooltip: 'Sección ${lona.seccion}',
-                    onPressed: () => _showLona(lona),
-                    icon: const Icon(Icons.panorama_rounded),
-                  ),
+        .map(
+          (lona) => Marker(
+            point: LatLng(lona.lat, lona.lng),
+            width: 32,
+            height: 32,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _showLona(lona),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7A0019).withValues(alpha: .9),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                  boxShadow: const [
+                    BoxShadow(color: Color(0x33000000), blurRadius: 5),
+                  ],
                 ),
-              )
-              .toList(),
-        ),
-        RichAttributionWidget(
-          attributions: const [
-            TextSourceAttribution('© OpenStreetMap contributors'),
+                child: const Icon(
+                  Icons.panorama_rounded,
+                  size: 17,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        )
+        .toList(growable: false);
+
+    return Stack(
+      children: [
+        FlutterMap(
+          mapController: _map,
+          options: MapOptions(
+            initialCenter: const LatLng(19.7026, -101.1922),
+            initialZoom: 8,
+            minZoom: 5,
+            maxZoom: 19,
+            onMapEvent: _onMapEvent,
+          ),
+          children: [
+            _tileLayer,
+            if (markers.isNotEmpty) MarkerLayer(markers: markers),
+            RichAttributionWidget(
+              attributions: const [
+                TextSourceAttribution('© OpenStreetMap contributors'),
+              ],
+            ),
           ],
         ),
+        if (_zoom < _minimumZoom)
+          const Positioned(
+            left: 12,
+            bottom: 12,
+            child: _Badge(
+              icon: Icons.zoom_in_rounded,
+              text: 'Acércate para ver lonas',
+            ),
+          )
+        else
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: _Badge(
+              icon: _offline
+                  ? Icons.offline_pin_rounded
+                  : Icons.panorama_rounded,
+              text: _offline
+                  ? '${_lonas.length} lonas guardadas'
+                  : '${_lonas.length}${_lonas.length >= _limit ? '+' : ''} en esta zona',
+            ),
+          ),
+        if (_loading)
+          const Positioned(
+            right: 16,
+            top: 16,
+            child: SizedBox.square(
+              dimension: 25,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            ),
+          ),
+        if (_error != null)
+          Positioned(
+            left: 12,
+            right: 12,
+            top: 12,
+            child: MaterialBanner(
+              content: Text(_error!),
+              actions: [
+                TextButton(
+                  onPressed: _loadVisible,
+                  child: const Text('REINTENTAR'),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }
@@ -142,7 +263,11 @@ class _LonaMapPageState extends State<LonaMapPage> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text(lona.direccion, maxLines: 3),
+                    Text(
+                      lona.direccion,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     const SizedBox(height: 6),
                     Text('Responsable: ${lona.responsable}'),
                   ],
@@ -154,4 +279,42 @@ class _LonaMapPageState extends State<LonaMapPage> {
       ),
     );
   }
+
+  static Map<String, dynamic> _cachePayload(Lona lona) => {
+    'id': lona.id,
+    'seccion': lona.seccion,
+    'direccion': lona.direccion,
+    'responsable': lona.responsable,
+    'lat': lona.lat,
+    'lng': lona.lng,
+    'foto_url': lona.fotoUrl,
+    'capturista': lona.capturista == null ? null : {'name': lona.capturista},
+    'created_at': lona.createdAt?.toIso8601String(),
+  };
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: .92),
+      borderRadius: BorderRadius.circular(18),
+      boxShadow: const [BoxShadow(color: Color(0x18000000), blurRadius: 8)],
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 17),
+          const SizedBox(width: 6),
+          Text(text, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ],
+      ),
+    ),
+  );
 }

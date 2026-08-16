@@ -5,17 +5,25 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'core/constants.dart';
+import 'core/brand_theme.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
 import 'services/push_service.dart';
+import 'ui/auth/auth_gate.dart';
 import 'ui/auth/login_page.dart';
 import 'ui/home/home_page.dart';
 import 'ui/comunicados/comunicados_page.dart';
 import 'ui/lonas/lona_capture_page.dart';
 import 'ui/lonas/lonas_page.dart';
+import 'ui/afiliados/afiliados_page.dart';
+import 'ui/secciones/secciones_page.dart';
+import 'ui/actividades/actividades_page.dart';
+import 'ui/reportes/reportes_page.dart';
+import 'ui/admin/admin_pages.dart';
+import 'ui/mapa/mapa_page.dart';
+import 'ui/actividades/calendar_page.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBg(RemoteMessage message) async {
@@ -45,58 +53,16 @@ Future<void> main() async {
 class AfiliadosApp extends StatelessWidget {
   const AfiliadosApp({super.key});
 
-  // Paleta “granate/dorado”
-  static const _granate = Color(0xFF7A0019);
-  static const _granateOsc = Color(0xFF5C0013);
-
   @override
   Widget build(BuildContext context) {
     final bool isMobile = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-    final base = ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: _granate,
-        brightness: Brightness.light,
-      ),
-      useMaterial3: true,
-    );
-
-    final themed = base.copyWith(
-      textTheme: GoogleFonts.montserratTextTheme(base.textTheme),
-      appBarTheme: AppBarTheme(
-        backgroundColor: _granate,
-        foregroundColor: Colors.white,
-        titleTextStyle: GoogleFonts.montserrat(
-          fontWeight: FontWeight.w800,
-          fontSize: 18,
-          color: Colors.white,
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _granate,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          textStyle: GoogleFonts.montserrat(fontWeight: FontWeight.w800),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      colorScheme: base.colorScheme.copyWith(
-        primary: _granate,
-        secondary: _granateOsc,
-      ),
-    );
-
     return MultiProvider(
       providers: [
         Provider<ApiClient>(create: (_) => ApiClient()),
-        ProxyProvider<ApiClient, AuthService>(
-          update: (_, api, __) => AuthService(api),
-          create: (_) => AuthService(ApiClient()),
+        ChangeNotifierProxyProvider<ApiClient, AuthService>(
+          update: (_, api, previous) => previous ?? AuthService(api),
+          create: (context) => AuthService(context.read<ApiClient>()),
         ),
         if (isMobile)
           Provider<PushService>(create: (_) => PushService.instance),
@@ -104,15 +70,83 @@ class AfiliadosApp extends StatelessWidget {
       child: MaterialApp(
         title: AppConstants.appName,
         debugShowCheckedModeBanner: false,
-        theme: themed,
+        theme: buildGladyzTheme(),
         routes: {
-          '/': (_) => const LoginPage(),
+          '/': (_) => const AuthGate(),
+          '/login': (_) => const LoginPage(),
           '/home': (_) => const HomePage(),
-          '/comunicados': (_) => const ComunicadosPage(),
-          '/lonas': (_) => const LonasPage(),
-          '/lonas/nueva': (_) => const LonaCapturePage(),
+          '/afiliados': (_) => const PermissionPage(
+            permission: 'afiliados.ver',
+            child: AfiliadosPage(),
+          ),
+          '/secciones': (_) => const PermissionPage(
+            permission: 'secciones.ver',
+            child: SeccionesPage(),
+          ),
+          '/actividades': (_) => const PermissionPage(
+            permission: 'actividades.ver',
+            child: ActividadesPage(),
+          ),
+          '/calendario': (_) => const PermissionPage(
+            permission: 'actividades.ver',
+            child: _CalendarShell(),
+          ),
+          '/mapa': (_) =>
+              const PermissionPage(permission: 'mapa.ver', child: MapaPage()),
+          '/reportes': (_) => const PermissionPage(
+            permission: 'reportes.ver',
+            child: ReportesPage(),
+          ),
+          '/comunicados': (_) => const PermissionPage(
+            permission: 'comunicados.ver',
+            child: ComunicadosPage(),
+          ),
+          '/lonas': (_) =>
+              const PermissionPage(permission: 'lonas.ver', child: LonasPage()),
+          '/lonas/nueva': (_) => const PermissionPage(
+            permission: 'lonas.crear',
+            child: LonaCapturePage(),
+          ),
+          '/admin': (_) => const AdminPage(),
+          '/admin/usuarios': (_) => const PermissionPage(
+            permission: 'usuarios.ver',
+            child: UsuariosPage(),
+          ),
+          '/admin/roles': (_) =>
+              const PermissionPage(permission: 'roles.ver', child: RolesPage()),
+          '/admin/permisos': (_) => const PermissionPage(
+            permission: 'permisos.ver',
+            child: RolePermissionsPage(),
+          ),
+          '/admin/comunicados': (_) => const PermissionPage(
+            permission: 'comunicados.ver',
+            child: ComunicadosAdminPage(),
+          ),
+          '/admin/configuracion': (_) => const PermissionPage(
+            permission: 'settings.ver',
+            child: AppSettingsPage(),
+          ),
         },
       ),
     );
   }
+}
+
+class _CalendarShell extends StatelessWidget {
+  const _CalendarShell();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Calendario'),
+      actions: [
+        IconButton(
+          tooltip: 'Administrar actividades',
+          onPressed: () => Navigator.pushNamed(context, '/actividades'),
+          icon: const Icon(Icons.view_list_rounded),
+        ),
+      ],
+    ),
+    body: const CalendarPage(),
+  );
 }

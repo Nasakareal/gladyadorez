@@ -1,18 +1,19 @@
 import 'dart:io' show Platform;
+
+import 'package:dio/dio.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:dio/dio.dart';
 
-import '../../services/auth_service.dart';
+import '../../core/brand_theme.dart';
 import '../../services/api_client.dart';
-import '../actividades/calendar_page.dart';
-import '../mapa/mapa_page.dart';
+import '../../services/auth_service.dart';
+import '../../services/offline_sync_service.dart';
+import 'feed_section.dart';
 
 class HomePage extends StatefulWidget {
-  /// Si quieres arrancar en otro tab, pásalo desde el Navigator:
-  /// Navigator.pushNamed(context, '/home', arguments: 1); // 0=Dashboard, 1=Calendario, 2=Mapa, 3=Reportes
   const HomePage({super.key});
 
   @override
@@ -20,401 +21,361 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // Marca
-  static const _granate = Color(0xFF7A0019);
-  static const _humo = Color(0xFFF5F5F7);
-
-  String? errorDevice;
-  int _tab = 0; // 0=Dashboard, 1=Calendario, 2=Mapa, 3=Reportes
-
-  // Páginas
-  late final List<Widget> _pages = [
-    _Dashboard(onGoCalendar: () => _setTab(1), onGoMap: () => _setTab(2)),
-    const CalendarPage(),
-    const MapaPage(),
-    const _Placeholder(title: 'Reportes'),
-  ];
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Permite elegir tab inicial vía argumentos de ruta
-    final arg = ModalRoute.of(context)?.settings.arguments;
-    if (arg is int && arg >= 0 && arg < _pages.length) {
-      _tab = arg;
-    }
-  }
+  String? _deviceError;
+  int? _syncOwnerId;
+  final _feedKey = GlobalKey<FeedSectionState>();
 
   @override
   void initState() {
     super.initState();
-    _registerDeviceToken();
-    _wireForegroundNotifications();
+    if (!kIsWeb && Firebase.apps.isNotEmpty) {
+      _registerDeviceToken();
+      _wireForegroundNotifications();
+    }
   }
 
-  Future<void> _registerDeviceToken() async {
-    if (Firebase.apps.isEmpty) return;
-    try {
-      // Pide permiso (en iOS muestra prompt; en Android no pasa nada)
-      await FirebaseMessaging.instance.requestPermission();
-
-      final fcm = await FirebaseMessaging.instance.getToken();
-      if (fcm != null && fcm.isNotEmpty) {
-        await _sendDeviceToServer(fcm);
-      }
-
-      // Si FCM rota el token, lo volvemos a registrar
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-        if (newToken.isNotEmpty) {
-          await _sendDeviceToServer(newToken);
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(
-        () => errorDevice = _fmtDioError(
-          e,
-          fallback: 'No se pudo registrar el dispositivo para notificaciones',
-        ),
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ownerId = context.read<AuthService>().user?.id;
+    if (ownerId != null && ownerId != _syncOwnerId) {
+      _syncOwnerId = ownerId;
+      OfflineSyncService.instance.initialize(
+        context.read<ApiClient>(),
+        ownerId: ownerId,
       );
     }
   }
 
-  Future<void> _sendDeviceToServer(String token) async {
-    final api = context.read<ApiClient>();
+  Future<void> _refresh() async {
+    await Future.wait([
+      context.read<AuthService>().restoreSession(),
+      OfflineSyncService.instance.flush(),
+      if (_feedKey.currentState != null) _feedKey.currentState!.refresh(),
+    ]);
+  }
+
+  Future<void> _registerDeviceToken() async {
     try {
-      // El interceptor del ApiClient ya mete el Authorization: Bearer <token> si existe.
-      await api.dio.post(
+      await FirebaseMessaging.instance.requestPermission();
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null && token.isNotEmpty) await _sendDevice(token);
+      FirebaseMessaging.instance.onTokenRefresh.listen(_sendDevice);
+    } catch (error) {
+      if (mounted) setState(() => _deviceError = _message(error));
+    }
+  }
+
+  Future<void> _sendDevice(String token) async {
+    if (kIsWeb) return;
+    try {
+      await context.read<ApiClient>().dio.post(
         '/v1/devices',
         data: {
           'token': token,
           'platform': Platform.isAndroid
               ? 'android'
-              : (Platform.isIOS ? 'ios' : 'other'),
+              : Platform.isIOS
+              ? 'ios'
+              : 'other',
         },
       );
-    } catch (e) {
-      if (!mounted) return;
-      setState(
-        () => errorDevice = _fmtDioError(
-          e,
-          fallback: 'No se pudo registrar el dispositivo para notificaciones',
-        ),
-      );
+    } catch (error) {
+      if (mounted) setState(() => _deviceError = _message(error));
     }
   }
 
   void _wireForegroundNotifications() {
-    if (Firebase.apps.isEmpty) return;
-    FirebaseMessaging.onMessage.listen((msg) {
-      final n = msg.notification;
-      if (!mounted || n == null) return;
+    FirebaseMessaging.onMessage.listen((message) {
+      final notification = message.notification;
+      if (!mounted || notification == null) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: _granate,
           behavior: SnackBarBehavior.floating,
-          content: Row(
-            children: [
-              const Icon(
-                Icons.notifications_active_rounded,
-                color: Colors.white,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text('${n.title ?? 'Notificación'} — ${n.body ?? ''}'),
-              ),
-            ],
+          backgroundColor: GladyzColors.granate,
+          content: Text(
+            '${notification.title ?? 'Notificación'} — ${notification.body ?? ''}',
           ),
         ),
       );
     });
   }
 
-  void _setTab(int i) => setState(() => _tab = i);
-
   @override
   Widget build(BuildContext context) {
-    final titles = const ['Dashboard', 'Calendario', 'Mapa', 'Reportes'];
-    final tt = Theme.of(context).textTheme;
-
+    final auth = context.watch<AuthService>();
+    final modules = _modules(auth);
     return Scaffold(
-      backgroundColor: _humo,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: _granate,
-        elevation: 0,
-        title: Text(
-          titles[_tab],
-          style: tt.titleLarge?.copyWith(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
+        backgroundColor: GladyzColors.granate.withValues(alpha: .84),
+        title: const _Wordmark(),
       ),
-      drawer: _AppDrawer(
-        currentTab: _tab,
-        onSelectTab: (i) {
-          Navigator.pop(context);
-          _setTab(i);
-        },
-        onLogout: () async {
-          await context.read<AuthService>().logout();
-          if (context.mounted) Navigator.of(context).pushReplacementNamed('/');
-        },
-      ),
-      body: Column(
-        children: [
-          if (errorDevice != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              color: const Color(0xFFFFF8E1),
-              child: Text(
-                errorDevice!,
-                style: tt.bodyMedium?.copyWith(color: const Color(0xFF8D6E63)),
-              ),
-            ),
-          Expanded(child: _pages[_tab]),
-        ],
-      ),
-      bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: _granate,
-          boxShadow: [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 8,
-              offset: Offset(0, -2),
-            ),
-          ],
-        ),
+      drawer: _AppDrawer(modules: modules),
+      body: GladyzBackdrop(
         child: SafeArea(
-          top: false,
-          child: BottomNavigationBar(
-            currentIndex: _tab,
-            onTap: _setTab,
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            selectedItemColor: Colors.white,
-            unselectedItemColor: Colors.white70,
-            showUnselectedLabels: true,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.dashboard_rounded),
-                label: 'Dashboard',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.calendar_month_rounded),
-                label: 'Calendario',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.map_rounded),
-                label: 'Mapa',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.bar_chart_rounded),
-                label: 'Reportes',
-              ),
-            ],
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: CustomScrollView(
+              cacheExtent: 500,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(14, 18, 14, 0),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate([
+                      GlassPanel(
+                        tint: GladyzColors.granate,
+                        opacity: .9,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Hola, ${auth.user?.name.split(' ').first ?? ''}',
+                              style: Theme.of(context).textTheme.headlineSmall
+                                  ?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              'Lo que está colocando el equipo en Michoacán',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: .82),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_deviceError != null) ...[
+                        const SizedBox(height: 10),
+                        GlassPanel(
+                          tint: GladyzColors.dorado,
+                          opacity: .22,
+                          child: Row(
+                            children: [
+                              const Icon(Icons.notifications_off_outlined),
+                              const SizedBox(width: 10),
+                              Expanded(child: Text(_deviceError!)),
+                              IconButton(
+                                onPressed: () =>
+                                    setState(() => _deviceError = null),
+                                icon: const Icon(Icons.close),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const _OfflineSyncBanner(),
+                    ]),
+                  ),
+                ),
+                if (auth.can('lonas.ver'))
+                  FeedSection(key: _feedKey)
+                else
+                  const SliverPadding(
+                    padding: EdgeInsets.all(14),
+                    sliver: SliverToBoxAdapter(
+                      child: GlassPanel(
+                        child: Text(
+                          'Tu cuenta no tiene acceso al feed de lonas.',
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
-      floatingActionButton: _tab == 1
-          ? FloatingActionButton.extended(
-              backgroundColor: _granate,
-              icon: const Icon(Icons.add),
-              label: const Text('Actividad'),
-              onPressed: () {
-                // TODO: conectar al flujo de crear actividad
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Crear actividad (pendiente)')),
-                );
-              },
-            )
-          : null,
     );
   }
 
-  String _fmtDioError(Object e, {required String fallback}) {
-    if (e is DioException) {
-      final sc = e.response?.statusCode;
-      final data = e.response?.data;
-      final body = data is String ? data : (data?.toString() ?? '');
-      return '$fallback (HTTP ${sc ?? '-'}) $body';
+  List<_Module> _modules(AuthService auth) {
+    final all = [
+      const _Module(
+        'Afiliados',
+        'Registro, consulta y seguimiento',
+        Icons.people_alt_rounded,
+        '/afiliados',
+        'afiliados.ver',
+      ),
+      const _Module(
+        'Secciones',
+        'Catálogo territorial',
+        Icons.grid_view_rounded,
+        '/secciones',
+        'secciones.ver',
+      ),
+      const _Module(
+        'Calendario',
+        'Agenda y actividades',
+        Icons.calendar_month_rounded,
+        '/calendario',
+        'actividades.ver',
+      ),
+      const _Module(
+        'Mapa',
+        'Visualización territorial',
+        Icons.map_rounded,
+        '/mapa',
+        'mapa.ver',
+      ),
+      const _Module(
+        'Reportes',
+        'Avances y resultados',
+        Icons.bar_chart_rounded,
+        '/reportes',
+        'reportes.ver',
+      ),
+      const _Module(
+        'Comunicados',
+        'Avisos y mensajes',
+        Icons.campaign_rounded,
+        '/comunicados',
+        'comunicados.ver',
+      ),
+      const _Module(
+        'Lonas',
+        'Captura, listado y mapa',
+        Icons.panorama_rounded,
+        '/lonas',
+        'lonas.ver',
+      ),
+      const _Module(
+        'Administración',
+        'Usuarios, roles y configuración',
+        Icons.admin_panel_settings_rounded,
+        '/admin',
+        '_admin',
+      ),
+    ];
+    return all.where((module) {
+      if (module.permission == '_admin') {
+        return auth.canAny([
+          'usuarios.ver',
+          'roles.ver',
+          'permisos.ver',
+          'settings.ver',
+        ]);
+      }
+      return auth.can(module.permission);
+    }).toList();
+  }
+
+  String _message(Object error) {
+    if (error is DioException && error.response?.statusCode == 403) {
+      return 'Las notificaciones no están disponibles para esta cuenta.';
     }
-    return fallback;
+    return 'No se pudieron activar las notificaciones.';
   }
 }
 
-/// Landing sencillo con marca y accesos rápidos
-class _Dashboard extends StatelessWidget {
-  static const _granate = Color(0xFF7A0019);
-  static const _granateOsc = Color(0xFF5C0013);
-  static const _dorado = Color(0xFFF2C14E);
-
-  final VoidCallback onGoCalendar;
-  final VoidCallback onGoMap;
-  const _Dashboard({required this.onGoCalendar, required this.onGoMap});
+class _OfflineSyncBanner extends StatelessWidget {
+  const _OfflineSyncBanner();
 
   @override
   Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 22, 16, 20),
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                colors: [_granate, _granateOsc],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+    final sync = OfflineSyncService.instance;
+    return ValueListenableBuilder<int>(
+      valueListenable: sync.pendingCount,
+      builder: (context, pending, _) => ValueListenableBuilder<bool>(
+        valueListenable: sync.offline,
+        builder: (context, offline, _) {
+          if (pending == 0 && !offline) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: GlassPanel(
+              tint: offline ? GladyzColors.dorado : Colors.white,
+              opacity: offline ? .28 : .7,
+              child: Row(
+                children: [
+                  Icon(
+                    offline
+                        ? Icons.cloud_off_rounded
+                        : Icons.cloud_upload_rounded,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      pending > 0
+                          ? '$pending captura${pending == 1 ? '' : 's'} pendiente${pending == 1 ? '' : 's'}. Se subirán automáticamente.'
+                          : 'Sin conexión. Puedes seguir capturando.',
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Sincronizar ahora',
+                    onPressed: sync.flush,
+                    icon: const Icon(Icons.sync_rounded),
+                  ),
+                ],
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                RichText(
-                  text: TextSpan(
-                    style: tt.headlineSmall?.copyWith(color: Colors.white),
-                    children: [
-                      const TextSpan(
-                        text: 'GLADY',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: .6,
-                        ),
-                      ),
-                      TextSpan(
-                        text: '•',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                        ).copyWith(color: _dorado),
-                      ),
-                      const TextSpan(
-                        text: 'ADOREZ',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: .6,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Michoacán que cumple',
-                  style: tt.bodySmall?.copyWith(
-                    color: Colors.white.withValues(alpha: .9),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _QuickCard(
-                  icon: Icons.calendar_month_rounded,
-                  title: 'Calendario',
-                  subtitle: 'Ver actividades',
-                  onTap: onGoCalendar,
-                ),
-                _QuickCard(
-                  icon: Icons.person_add_alt_1_rounded,
-                  title: 'Afiliados',
-                  subtitle: 'Captura y listado',
-                  onTap: () {}, // TODO
-                ),
-                _QuickCard(
-                  icon: Icons.map_rounded,
-                  title: 'Mapa',
-                  subtitle: 'Visualización territorial',
-                  onTap: onGoMap,
-                ),
-                _QuickCard(
-                  icon: Icons.bar_chart_rounded,
-                  title: 'Reportes',
-                  subtitle: 'Avance y ranking',
-                  onTap: () {},
-                ),
-                _QuickCard(
-                  icon: Icons.campaign_rounded,
-                  title: 'Comunicados',
-                  subtitle: 'Avisos y mensajes',
-                  onTap: () => Navigator.pushNamed(context, '/comunicados'),
-                ),
-                _QuickCard(
-                  icon: Icons.panorama_rounded,
-                  title: 'Lonas',
-                  subtitle: 'Captura, listado y mapa',
-                  onTap: () => Navigator.pushNamed(context, '/lonas'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
+          );
+        },
       ),
     );
   }
 }
 
-class _QuickCard extends StatelessWidget {
-  final IconData icon;
+class _Module {
+  const _Module(
+    this.title,
+    this.subtitle,
+    this.icon,
+    this.route,
+    this.permission,
+  );
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
-  const _QuickCard({
-    required this.icon,
+  final IconData icon;
+  final String route;
+  final String permission;
+}
+
+class HomeModuleCard extends StatelessWidget {
+  const HomeModuleCard({
+    super.key,
     required this.title,
     required this.subtitle,
-    required this.onTap,
+    required this.icon,
+    required this.route,
   });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final String route;
 
   @override
   Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-    return SizedBox(
-      width: (MediaQuery.of(context).size.width - 12 * 3) / 2,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x14000000),
-                blurRadius: 12,
-                offset: Offset(0, 6),
+    return GlassPanel(
+      onTap: () => Navigator.pushNamed(context, route),
+      padding: const EdgeInsets.all(15),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 126),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: GladyzColors.granate.withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(14),
               ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, color: const Color(0xFF7A0019)),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: tt.bodySmall?.copyWith(color: Colors.black54),
-              ),
-            ],
-          ),
+              child: Icon(icon, color: GladyzColors.granate),
+            ),
+            const SizedBox(height: 18),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 3),
+            Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
         ),
       ),
     );
@@ -422,163 +383,112 @@ class _QuickCard extends StatelessWidget {
 }
 
 class _AppDrawer extends StatelessWidget {
-  static const _granate = Color(0xFF7A0019);
-  static const _granateOsc = Color(0xFF5C0013);
-  static const _dorado = Color(0xFFF2C14E);
-
-  final int currentTab;
-  final void Function(int) onSelectTab;
-  final Future<void> Function() onLogout;
-
-  const _AppDrawer({
-    required this.currentTab,
-    required this.onSelectTab,
-    required this.onLogout,
-  });
+  const _AppDrawer({required this.modules});
+  final List<_Module> modules;
 
   @override
   Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-
+    final auth = context.watch<AuthService>();
     return Drawer(
-      child: SafeArea(
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [_granate, _granateOsc],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+      backgroundColor: Colors.transparent,
+      child: GladyzBackdrop(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: GlassPanel(
+                  tint: GladyzColors.granate,
+                  opacity: .9,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const _Wordmark(),
+                      const SizedBox(height: 13),
+                      Text(
+                        auth.user?.name ?? '',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      Text(
+                        auth.user?.email ?? '',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: .72),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              width: double.infinity,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  RichText(
-                    text: TextSpan(
-                      style: tt.titleLarge?.copyWith(color: Colors.white),
-                      children: [
-                        const TextSpan(
-                          text: 'GLADY',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .6,
-                          ),
-                        ),
-                        TextSpan(
-                          text: '•',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            color: _dorado,
-                          ),
-                        ),
-                        const TextSpan(
-                          text: 'ADOREZ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .6,
-                          ),
-                        ),
-                      ],
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.home_rounded),
+                      title: const Text('Inicio'),
+                      onTap: () => Navigator.pop(context),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Michoacán que cumple',
-                    style: tt.bodySmall?.copyWith(
-                      color: Colors.white.withValues(alpha: .9),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _drawerItem(
-              icon: Icons.dashboard_rounded,
-              label: 'Dashboard',
-              selected: currentTab == 0,
-              onTap: () => onSelectTab(0),
-            ),
-            _drawerItem(
-              icon: Icons.calendar_month_rounded,
-              label: 'Calendario',
-              selected: currentTab == 1,
-              onTap: () => onSelectTab(1),
-            ),
-            _drawerItem(
-              icon: Icons.map_rounded,
-              label: 'Mapa',
-              selected: currentTab == 2,
-              onTap: () => onSelectTab(2),
-            ),
-            _drawerItem(
-              icon: Icons.bar_chart_rounded,
-              label: 'Reportes',
-              selected: currentTab == 3,
-              onTap: () => onSelectTab(3),
-            ),
-            _drawerItem(
-              icon: Icons.campaign_rounded,
-              label: 'Comunicados',
-              selected: false,
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushNamed(context, '/comunicados');
-              },
-            ),
-            _drawerItem(
-              icon: Icons.panorama_rounded,
-              label: 'Lonas',
-              selected: false,
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.pushNamed(context, '/lonas');
-              },
-            ),
-
-            const Spacer(),
-            Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  icon: const Icon(Icons.logout),
-                  label: const Text('Salir'),
-                  onPressed: () async => onLogout(),
+                    for (final module in modules)
+                      ListTile(
+                        leading: Icon(module.icon),
+                        title: Text(module.title),
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.pushNamed(context, module.route);
+                        },
+                      ),
+                  ],
                 ),
               ),
-            ),
-          ],
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.logout_rounded),
+                title: const Text('Cerrar sesión'),
+                onTap: () async {
+                  await context.read<AuthService>().logout();
+                  if (context.mounted) {
+                    Navigator.of(
+                      context,
+                    ).pushNamedAndRemoveUntil('/login', (_) => false);
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
   }
-
-  Widget _drawerItem({
-    required IconData icon,
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return ListTile(
-      leading: Icon(icon, color: _granate),
-      title: Text(label),
-      selected: selected,
-      selectedTileColor: const Color(0x10FFFFFF),
-      onTap: onTap,
-    );
-  }
 }
 
-class _Placeholder extends StatelessWidget {
-  final String title;
-  const _Placeholder({required this.title});
+class _Wordmark extends StatelessWidget {
+  const _Wordmark();
 
   @override
-  Widget build(BuildContext context) {
-    return Center(child: Text('$title (próximamente)'));
-  }
+  Widget build(BuildContext context) => Text.rich(
+    const TextSpan(
+      children: [
+        TextSpan(
+          text: 'GLADY',
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: .5),
+        ),
+        TextSpan(
+          text: '•',
+          style: TextStyle(
+            color: GladyzColors.dorado,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        TextSpan(
+          text: 'ADOREZ',
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: .5),
+        ),
+      ],
+    ),
+  );
 }

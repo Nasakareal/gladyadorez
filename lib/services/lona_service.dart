@@ -35,8 +35,19 @@ class LonaService {
     );
   }
 
-  Future<List<Lona>> fetchMapData() async {
-    final response = await api.dio.get('/v1/lonas/mapa');
+  Future<List<Lona>> fetchMapData({
+    String? bbox,
+    int limit = 180,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await api.dio.get(
+      '/v1/lonas/mapa',
+      queryParameters: {
+        'limit': limit,
+        if (bbox != null && bbox.isNotEmpty) 'bbox': bbox,
+      },
+      cancelToken: cancelToken,
+    );
     final raw = response.data as List? ?? const [];
     return raw
         .map((item) => Lona.fromJson(Map<String, dynamic>.from(item as Map)))
@@ -72,6 +83,30 @@ class LonaService {
     final response = await api.dio.post('/v1/lonas', data: data);
     return Lona.fromJson(Map<String, dynamic>.from(response.data as Map));
   }
+
+  Future<Lona> updateLona({
+    required int id,
+    required String seccion,
+    required String direccion,
+    required String responsable,
+    required double lat,
+    required double lng,
+  }) async {
+    final response = await api.dio.put(
+      '/v1/lonas/$id',
+      data: {
+        'seccion': seccion.trim(),
+        'direccion': direccion.trim(),
+        'responsable': responsable.trim(),
+        'lat': lat,
+        'lng': lng,
+        'ubicacion_google': 'https://www.google.com/maps?q=$lat,$lng',
+      },
+    );
+    return Lona.fromJson(Map<String, dynamic>.from(response.data as Map));
+  }
+
+  Future<void> deleteLona(int id) => api.dio.delete('/v1/lonas/$id');
 
   static int _asInt(Object? value, int fallback) =>
       value is num ? value.toInt() : int.tryParse('$value') ?? fallback;

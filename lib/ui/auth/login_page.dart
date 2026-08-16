@@ -15,7 +15,7 @@ class _LoginPageState extends State<LoginPage> {
   final passCtrl = TextEditingController();
   bool loading = false;
   String? error;
-  bool remember = false;
+  bool remember = true;
 
   // Colores de marca
   static const granate = Color(0xFF7A0019);

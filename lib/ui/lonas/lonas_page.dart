@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../../services/auth_service.dart';
 import 'lona_list_page.dart';
 import 'lona_map_page.dart';
 
@@ -43,11 +45,13 @@ class _LonasPageState extends State<LonasPage> {
             LonaMapPage(key: ValueKey('map-$_revision')),
           ],
         ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: _capture,
-          icon: const Icon(Icons.add_a_photo_rounded),
-          label: const Text('Capturar'),
-        ),
+        floatingActionButton: context.watch<AuthService>().can('lonas.crear')
+            ? FloatingActionButton.extended(
+                onPressed: _capture,
+                icon: const Icon(Icons.add_a_photo_rounded),
+                label: const Text('Capturar'),
+              )
+            : null,
       ),
     );
   }

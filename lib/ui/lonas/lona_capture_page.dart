@@ -9,7 +9,9 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/api_client.dart';
-import '../../services/lona_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/offline_sync_service.dart';
+import '../../widgets/safe_osm_tile_layer.dart';
 
 class LonaCapturePage extends StatefulWidget {
   const LonaCapturePage({super.key});
@@ -27,6 +29,7 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
   final _direccion = TextEditingController();
   final _map = MapController();
   final _picker = ImagePicker();
+  late final TileLayer _tileLayer;
 
   LatLng? _point;
   XFile? _photo;
@@ -34,6 +37,14 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
   bool _locating = false;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _tileLayer = buildSafeOpenStreetMapTileLayer(
+      userAgentPackageName: 'mx.utmorelia.sistemaAfiliadosApp',
+    );
+  }
 
   @override
   void dispose() {
@@ -65,6 +76,12 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
           'No hay permiso de ubicación. Puedes marcar el punto tocando el mapa.',
         );
       }
+      // El GPS no necesita datos móviles. Mostramos primero la última posición
+      // conocida y luego la afinamos con una lectura nueva cuando esté disponible.
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null) {
+        _setPoint(LatLng(lastKnown.latitude, lastKnown.longitude), move: true);
+      }
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -74,11 +91,16 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
       _setPoint(LatLng(position.latitude, position.longitude), move: true);
     } catch (error) {
       if (mounted) {
-        setState(
-          () => _error = error is _FriendlyException
-              ? error.message
-              : 'No se pudo obtener la ubicación. Marca el punto en el mapa.',
-        );
+        setState(() {
+          if (_point != null) {
+            _error =
+                'Usando la última ubicación GPS guardada. Puedes ajustar el punto en el mapa.';
+          } else {
+            _error = error is _FriendlyException
+                ? error.message
+                : 'No se pudo obtener la ubicación. Marca el punto en el mapa.';
+          }
+        });
       }
     } finally {
       if (mounted) setState(() => _locating = false);
@@ -125,17 +147,34 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
       _error = null;
     });
     try {
-      await LonaService(context.read<ApiClient>()).createLona(
-        seccion: _seccion.text,
-        direccion: _direccion.text,
-        responsable: _responsable.text,
-        lat: _point!.latitude,
-        lng: _point!.longitude,
-        foto: _photo!,
+      final auth = context.read<AuthService>();
+      final ownerId = auth.user!.id;
+      final sync = OfflineSyncService.instance;
+      await sync.initialize(context.read<ApiClient>(), ownerId: ownerId);
+      final lat = _point!.latitude.toStringAsFixed(7);
+      final lng = _point!.longitude.toStringAsFixed(7);
+      final result = await sync.submitLona(
+        ownerId: ownerId,
+        fields: {
+          'seccion': _seccion.text.trim(),
+          'direccion': _direccion.text.trim(),
+          'responsable': _responsable.text.trim(),
+          'lat': lat,
+          'lng': lng,
+          'ubicacion_google': 'https://www.google.com/maps?q=$lat,$lng',
+        },
+        photoPath: _photo!.path,
+        photoName: _photo!.name.isEmpty ? 'lona.jpg' : _photo!.name,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lona registrada correctamente.')),
+        SnackBar(
+          content: Text(
+            result.queued
+                ? 'Guardada sin conexión. Se subirá automáticamente al recuperar señal.'
+                : 'Lona registrada correctamente.',
+          ),
+        ),
       );
       Navigator.of(context).pop(true);
     } catch (error) {
@@ -257,11 +296,7 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
                     onTap: (_, point) => _setPoint(point),
                   ),
                   children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'mx.utmorelia.sistemaAfiliadosApp',
-                    ),
+                    _tileLayer,
                     if (_point != null)
                       MarkerLayer(
                         markers: [
@@ -364,8 +399,10 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
                     color: Colors.white,
                   ),
                 )
-              : const Icon(Icons.cloud_upload_rounded),
-          label: Text(_saving ? 'Guardando…' : 'Guardar lona'),
+              : const Icon(Icons.save_alt_rounded),
+          label: Text(
+            _saving ? 'Guardando…' : 'Guardar lona (también offline)',
+          ),
         ),
       ),
     );

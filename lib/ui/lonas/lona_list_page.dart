@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/lona.dart';
 import '../../services/api_client.dart';
+import '../../services/auth_service.dart';
 import '../../services/lona_service.dart';
 import 'authenticated_image.dart';
 
@@ -123,7 +124,10 @@ class _LonaListPageState extends State<LonaListPage> {
               sliver: SliverList.separated(
                 itemCount: _page!.items.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (_, index) => _LonaCard(lona: _page!.items[index]),
+                itemBuilder: (_, index) => _LonaCard(
+                  lona: _page!.items[index],
+                  onChanged: () => _load(page: _requestedPage),
+                ),
               ),
             ),
             SliverToBoxAdapter(
@@ -159,20 +163,24 @@ class _LonaListPageState extends State<LonaListPage> {
 }
 
 class _LonaCard extends StatelessWidget {
-  const _LonaCard({required this.lona});
+  const _LonaCard({required this.lona, required this.onChanged});
 
   final Lona lona;
+  final VoidCallback onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          builder: (_) => _LonaDetail(lona: lona),
-        ),
+        onTap: () async {
+          final changed = await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => _LonaDetail(lona: lona),
+          );
+          if (changed == true) onChanged();
+        },
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -276,10 +284,143 @@ class _LonaDetail extends StatelessWidget {
             SelectableText(
               '${lona.lat.toStringAsFixed(7)}, ${lona.lng.toStringAsFixed(7)}',
             ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                if (context.watch<AuthService>().can('lonas.editar'))
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => _edit(context),
+                      icon: const Icon(Icons.edit_rounded),
+                      label: const Text('Editar'),
+                    ),
+                  ),
+                if (context.watch<AuthService>().can('lonas.editar') &&
+                    context.watch<AuthService>().can('lonas.borrar'))
+                  const SizedBox(width: 10),
+                if (context.watch<AuthService>().can('lonas.borrar'))
+                  IconButton.filledTonal(
+                    tooltip: 'Eliminar',
+                    onPressed: () => _delete(context),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _edit(BuildContext context) async {
+    final section = TextEditingController(text: lona.seccion);
+    final address = TextEditingController(text: lona.direccion);
+    final owner = TextEditingController(text: lona.responsable);
+    final latitude = TextEditingController(text: '${lona.lat}');
+    final longitude = TextEditingController(text: '${lona.lng}');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Editar lona'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: section,
+                decoration: const InputDecoration(labelText: 'Sección'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: address,
+                decoration: const InputDecoration(labelText: 'Dirección'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: owner,
+                decoration: const InputDecoration(labelText: 'Responsable'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: latitude,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                  signed: true,
+                ),
+                decoration: const InputDecoration(labelText: 'Latitud'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: longitude,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                  signed: true,
+                ),
+                decoration: const InputDecoration(labelText: 'Longitud'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final lat = double.tryParse(latitude.text);
+              final lng = double.tryParse(longitude.text);
+              if (section.text.trim().isEmpty ||
+                  address.text.trim().isEmpty ||
+                  owner.text.trim().isEmpty ||
+                  lat == null ||
+                  lng == null) {
+                return;
+              }
+              await LonaService(context.read<ApiClient>()).updateLona(
+                id: lona.id,
+                seccion: section.text,
+                direccion: address.text,
+                responsable: owner.text,
+                lat: lat,
+                lng: lng,
+              );
+              if (dialogContext.mounted) Navigator.pop(dialogContext, true);
+            },
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    section.dispose();
+    address.dispose();
+    owner.dispose();
+    latitude.dispose();
+    longitude.dispose();
+    if (saved == true && context.mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _delete(BuildContext context) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Eliminar lona'),
+        content: const Text('Esta acción no se puede deshacer.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !context.mounted) return;
+    await LonaService(context.read<ApiClient>()).deleteLona(lona.id);
+    if (context.mounted) Navigator.pop(context, true);
   }
 }
 
