@@ -169,6 +169,7 @@ class AuthService extends ChangeNotifier {
       'actividades.ver',
       'mapa.ver',
       'reportes.ver',
+      'avance.ver',
       'lonas.ver',
       'comunicados.ver',
     ])) {

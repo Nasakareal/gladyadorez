@@ -230,6 +230,13 @@ class _HomePageState extends State<HomePage> {
         'reportes.ver',
       ),
       const _Module(
+        'Avance',
+        'Metas, convencidos y lonas',
+        Icons.trending_up_rounded,
+        '/avance',
+        'avance.ver',
+      ),
+      const _Module(
         'Comunicados',
         'Avisos y mensajes',
         Icons.campaign_rounded,

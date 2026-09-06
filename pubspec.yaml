@@ -1,7 +1,7 @@
 name: sistema_afiliados_app
 description: "App de Sistema Afiliados"
 publish_to: 'none'
-version: 1.1.2+3
+version: 1.2.1+5
 
 environment:
   sdk: ^3.8.1

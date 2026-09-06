@@ -24,6 +24,7 @@ import 'ui/reportes/reportes_page.dart';
 import 'ui/admin/admin_pages.dart';
 import 'ui/mapa/mapa_page.dart';
 import 'ui/actividades/calendar_page.dart';
+import 'ui/avance/avance_page.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBg(RemoteMessage message) async {
@@ -96,6 +97,10 @@ class AfiliadosApp extends StatelessWidget {
           '/reportes': (_) => const PermissionPage(
             permission: 'reportes.ver',
             child: ReportesPage(),
+          ),
+          '/avance': (_) => const PermissionPage(
+            permission: 'avance.ver',
+            child: AvancePage(),
           ),
           '/comunicados': (_) => const PermissionPage(
             permission: 'comunicados.ver',
