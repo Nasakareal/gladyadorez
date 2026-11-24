@@ -1,4 +1,48 @@
 workflows:
+  ios-app-store:
+    name: iOS App Store (CocoaPods)
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.nasakareal.gladyadorez
+      flutter: 3.32.7
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Disable Swift Package Manager
+        script: |
+          flutter config --no-enable-swift-package-manager
+          flutter clean
+
+      - name: Get Flutter packages
+        script: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios
+          pod install --repo-update
+
+      - name: Set up iOS signing
+        script: xcode-project use-profiles
+
+      - name: Analyze and test
+        script: |
+          flutter analyze
+          flutter test
+
+      - name: Build signed IPA
+        script: |
+          flutter build ipa --release \
+            --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
   ios-simulator-preview:
     name: iOS Simulator App Preview
     max_build_duration: 60

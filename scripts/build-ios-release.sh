@@ -16,6 +16,8 @@ if [[ ! -f "$FIREBASE_PLIST" ]]; then
 fi
 
 cd "$ROOT_DIR"
+flutter config --no-enable-swift-package-manager
+flutter clean
 flutter pub get
 (cd ios && pod install --repo-update)
 flutter analyze

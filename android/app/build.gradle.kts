@@ -47,8 +47,8 @@ android {
     defaultConfig {
         applicationId = "mx.utmorelia.sistema_afiliados_app"
 
-        // Firebase Messaging requiere minSdk >= 23
-        minSdk = maxOf(23, flutter.minSdkVersion)
+        // Google Play Play Automatic Protection requiere API 24 o superior.
+        minSdk = maxOf(24, flutter.minSdkVersion)
         targetSdk = 36
 
         // Toma versionCode/versionName del pubspec.yaml
