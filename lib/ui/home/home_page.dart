@@ -251,6 +251,13 @@ class _HomePageState extends State<HomePage> {
         'lonas.ver',
       ),
       const _Module(
+        'Brigadas',
+        'Consulta y confirma tu asistencia',
+        Icons.groups_rounded,
+        '/brigadas',
+        'brigadas.ver',
+      ),
+      const _Module(
         'Administración',
         'Usuarios, roles y configuración',
         Icons.admin_panel_settings_rounded,

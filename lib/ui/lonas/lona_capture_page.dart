@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../../services/api_client.dart';
 import '../../services/auth_service.dart';
 import '../../services/offline_sync_service.dart';
+import '../../services/section_locator.dart';
 import '../../widgets/safe_osm_tile_layer.dart';
 
 class LonaCapturePage extends StatefulWidget {
@@ -22,6 +23,7 @@ class LonaCapturePage extends StatefulWidget {
 
 class _LonaCapturePageState extends State<LonaCapturePage> {
   static const _defaultPoint = LatLng(19.7026, -101.1922);
+  static List<ElectoralSectionPoint>? _sectionPointsCache;
 
   final _formKey = GlobalKey<FormState>();
   final _seccion = TextEditingController();
@@ -35,8 +37,11 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
   XFile? _photo;
   Uint8List? _preview;
   bool _locating = false;
+  bool _lookingUpSection = false;
   bool _saving = false;
   String? _error;
+  String? _sectionLookupMessage;
+  int _sectionLookupGeneration = 0;
 
   @override
   void initState() {
@@ -110,6 +115,62 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
   void _setPoint(LatLng point, {bool move = false}) {
     setState(() => _point = point);
     if (move) _map.move(point, 18);
+    _autofillSection(point);
+  }
+
+  Future<void> _autofillSection(LatLng point) async {
+    final generation = ++_sectionLookupGeneration;
+    setState(() {
+      _lookingUpSection = true;
+      _sectionLookupMessage = 'Buscando sección…';
+    });
+
+    try {
+      var points = _sectionPointsCache;
+      if (points == null) {
+        final response = await context.read<ApiClient>().dio.get(
+          '/v1/secciones',
+          queryParameters: {'page': 1, 'per_page': 5000},
+        );
+        final raw = response.data;
+        final list = raw is List
+            ? raw
+            : raw is Map && raw['data'] is List
+            ? raw['data'] as List
+            : const [];
+        points = list
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .where(ElectoralSectionPoint.hasCoordinates)
+            .map(ElectoralSectionPoint.fromJson)
+            .toList(growable: false);
+        if (points.isNotEmpty) _sectionPointsCache = points;
+      }
+
+      if (!mounted || generation != _sectionLookupGeneration) return;
+      final match = findNearestSection(
+        points,
+        latitude: point.latitude,
+        longitude: point.longitude,
+      );
+      setState(() {
+        _lookingUpSection = false;
+        if (match == null) {
+          _sectionLookupMessage =
+              'No se encontró una sección cercana. Escríbela manualmente.';
+          return;
+        }
+        _seccion.text = match.point.section;
+        _sectionLookupMessage = 'Sugerida por la ubicación; puedes corregirla.';
+      });
+    } catch (_) {
+      if (!mounted || generation != _sectionLookupGeneration) return;
+      setState(() {
+        _lookingUpSection = false;
+        _sectionLookupMessage =
+            'No se pudo calcular. Puedes escribirla manualmente.';
+      });
+    }
   }
 
   Future<void> _pickPhoto(ImageSource source) async {
@@ -216,9 +277,17 @@ class _LonaCapturePageState extends State<LonaCapturePage> {
                     controller: _seccion,
                     keyboardType: TextInputType.number,
                     maxLength: 10,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Sección *',
-                      prefixIcon: Icon(Icons.tag_rounded),
+                      prefixIcon: const Icon(Icons.tag_rounded),
+                      helperText: _sectionLookupMessage,
+                      helperMaxLines: 2,
+                      suffixIcon: _lookingUpSection
+                          ? const Padding(
+                              padding: EdgeInsets.all(13),
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : null,
                     ),
                     validator: (value) => value == null || value.trim().isEmpty
                         ? 'Es obligatoria'

@@ -25,6 +25,7 @@ import 'ui/admin/admin_pages.dart';
 import 'ui/mapa/mapa_page.dart';
 import 'ui/actividades/calendar_page.dart';
 import 'ui/avance/avance_page.dart';
+import 'ui/brigadas/brigadas_page.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBg(RemoteMessage message) async {
@@ -111,6 +112,10 @@ class AfiliadosApp extends StatelessWidget {
           '/lonas/nueva': (_) => const PermissionPage(
             permission: 'lonas.crear',
             child: LonaCapturePage(),
+          ),
+          '/brigadas': (_) => const PermissionPage(
+            permission: 'brigadas.ver',
+            child: BrigadasPage(),
           ),
           '/admin': (_) => const AdminPage(),
           '/admin/usuarios': (_) => const PermissionPage(
